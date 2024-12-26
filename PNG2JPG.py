@@ -17,5 +17,5 @@ def convert_png_to_jpg(folder_path):
                     print(f"Failed to convert {png_path}: {str(e)}")
 
 if __name__ == "__main__":
-    folder_path = "/Users/samxie/Research/CrowdImageComp/99design/OngoingCrawl/Image_99Design/ContestImage/OngoingFrom241004"
+    folder_path = "/The path that you store your image folder"
     convert_png_to_jpg(folder_path)
