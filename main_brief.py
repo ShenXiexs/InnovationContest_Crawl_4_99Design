@@ -5,8 +5,8 @@ from Ongoing_Crawl99designBrief import download_brief
 
 def main():
     # Set base paths
-    output_dir_list = "./Image_99Design/ContestList/OngoingFrom241004"  # Path for contest list CSV
-    output_dir_Image = "./Image_99Design/ContestImage/OngoingFrom241004"  # Path for images and summary CSV
+    output_dir_list = "./your crawl list csv"  # Path for contest list CSV
+    output_dir_Image = "./your store path"  # Path for images and summary CSV
 
     # Ensure output directories exist
     os.makedirs(output_dir_list, exist_ok=True)
