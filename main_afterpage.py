@@ -6,8 +6,8 @@ from Ongoing_Crawl99design import download_images
 
 def main():
     # Set base path
-    output_dir_list = "./Image_99Design/ContestList/OngoingFrom241004"  # Path to save contest list CSV
-    output_dir_Image = "./Image_99Design/ContestImage/OngoingFrom241004"
+    output_dir_list = "your crawl list"  # Path to save contest list CSV
+    output_dir_Image = "your store path"
 
     # Ensure output directories exist
     os.makedirs(output_dir_Image, exist_ok=True)  # Create directory to save images
