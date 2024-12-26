@@ -9,8 +9,8 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = None
 
 def main():
-    contest_dir = './Image_99Design/ContestImage/OngoingFrom241004'  
-    agg_output_file = os.path.join(contest_dir, 'SimiContestFinal.csv')  # Output file for aggregated similarity statistics
+    contest_dir = 'Input your own dir'  
+    agg_output_file = os.path.join(contest_dir, 'your file.csv')  # Output file for aggregated similarity statistics
     model = load_vgg16_model()  # Loading the VGG16 model
 
     # Load the OngoingContest_1004to1020.csv and c'x'd sort by ContestIDZ in descending order
