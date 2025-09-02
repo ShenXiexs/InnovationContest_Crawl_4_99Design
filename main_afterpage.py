@@ -395,10 +395,10 @@ def main():
     
     if total_contests > 0:
         success_rate = successful_downloads / total_contests * 100
-        logger.info(f"🎯 成功率: {success_rate:.2f}%")
+        logger.info(f" 成功率: {success_rate:.2f}%")
     
     if failed_downloads > 0:
-        logger.info(f"📋 失败记录已保存到: {failed_contests_csv}")
+        logger.info(f" 失败记录已保存到: {failed_contests_csv}")
     
     logger.info("="*60)
     print(f"Aggregated CSV file saved as {all_contests_csv}")
