@@ -514,7 +514,11 @@ def download_images(url, output_dir, csv_filename, nonactive=False):
                 user_id = entry.get('data-user-id')
                 design_id = entry.get('data-design-id')
                 designer_tag = entry.find('a', class_='entry-owner__designer-name-link')
-                user_url = f"https://99designs.hk{designer_tag.get('href')}" if designer_tag else 'N/A'
+                if designer_tag:
+                    base_href = designer_tag.get('href')
+                    user_url = f"https://99designs.hk{base_href.rstrip('/')}/about"
+                else:
+                    user_url = 'N/A'
                 user_name = designer_tag.text.strip() if designer_tag else 'N/A'
 
                 # 获取用户信息（使用缓存）
