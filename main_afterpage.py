@@ -280,15 +280,14 @@ def main():
             save_progress(progress_file, contest_id)
             successful_downloads += 1
             
-            # 定期保存聚合数据
-            if successful_downloads % 5 == 0:
-                all_contests_df.to_csv(all_contests_csv, index=False)
-                logger.info(f" 已保存中间进度，累计成功 {successful_downloads} 个比赛")
-            
+            # 每处理完一个比赛就保存聚合数据
+            all_contests_df.to_csv(all_contests_csv, index=False)
+            logger.info(f" 已保存聚合数据，累计成功 {successful_downloads} 个比赛，总记录数: {len(all_contests_df)}")
+
             continue
         
         # Step 5: Download images for the contest with retry mechanism
-        logger.info(f"🔄 开始下载比赛: {contest_name} (ID: {contest_id})...")
+        logger.info(f" 开始下载比赛: {contest_name} (ID: {contest_id})...")
         
         download_success, error_message = download_contest_with_retry(
             contest_url, 
@@ -317,11 +316,10 @@ def main():
                     
                     logger.info(f" 已合并数据: {len(contest_df)} 条记录")
                     
-                    # 定期保存聚合数据，防止数据丢失
-                    if successful_downloads % 5 == 0:
-                        all_contests_df.to_csv(all_contests_csv, index=False)
-                        logger.info(f" 已保存中间进度，累计成功 {successful_downloads} 个比赛")
-                        
+                    # 每处理完一个比赛就保存聚合数据，防止数据丢失
+                    all_contests_df.to_csv(all_contests_csv, index=False)
+                    logger.info(f" 已保存聚合数据，累计成功 {successful_downloads} 个比赛，总记录数: {len(all_contests_df)}")
+                
                 except Exception as e:
                     logger.error(f"合并数据时出错: {contest_name} (ID: {contest_id}), 错误: {e}")
             
