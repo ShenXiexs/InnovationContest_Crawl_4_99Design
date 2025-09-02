@@ -38,9 +38,28 @@ def create_robust_session():
     
     return session
 
-def safe_request(session, url, cookies, headers, max_retries=5, base_delay=2):
+class WAFChallengeError(Exception):
+    """Raised when AWS WAF challenge page is detected."""
+    pass
+
+def _looks_like_waf(html_text: str) -> bool:
+    """检测返回内容是否是 AWS WAF 挑战页"""
+    if not html_text:
+        return False
+    t = html_text.lower()
+    # 这些标记来自你贴出来的 challenge 页
+    return (
+        'token.awswaf.com' in t or
+        'challenge.js' in t or
+        'id="challenge-container"' in t or
+        "we need to verify that you're not a robot" in t
+    )
+
+def safe_request(session, url, cookies, headers, max_retries=5, base_delay=2, waf_max_retries=5):
     """
-    安全的HTTP请求函数，专门处理网络连接问题
+    安全的HTTP请求函数，专门处理网络连接问题 + AWS WAF 挑战识别
+    - 网络类异常：最多重试 max_retries 次
+    - WAF 挑战：最多重试 waf_max_retries 次（与 max_retries 独立）
     """
     retryable_exceptions = (
         ProxyError, 
@@ -50,39 +69,55 @@ def safe_request(session, url, cookies, headers, max_retries=5, base_delay=2):
         SSLError,
         requests.exceptions.ChunkedEncodingError,
         requests.exceptions.ConnectionError,
-        RequestException
+        RequestException,
+        WAFChallengeError,  # 把 WAF 也视为可重试
     )
-    
+
+    waf_attempts = 0
+
     for attempt in range(max_retries):
         try:
-            # 添加随机延迟，避免请求过于密集
             if attempt > 0:
                 delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0.5, 1.5)
-                delay = min(delay, 30)  # 最大延迟30秒
-                logger.warning(f"请求重试 #{attempt + 1}, 等待 {delay:.1f} 秒...")
+                delay = min(delay, 30)
+                logger.warning(f"请求重试 #{attempt + 1}, 等待 {delay:.1f} 秒... -> {url}")
                 time.sleep(delay)
-            
+
             response = session.get(url, cookies=cookies, headers=headers, timeout=30)
             response.raise_for_status()
+
+            # —— 新增：检测是否为 WAF 挑战页
+            if _looks_like_waf(response.text):
+                waf_attempts += 1
+                logger.error(
+                    f"检测到 AWS WAF 挑战页 (第 {waf_attempts}/{waf_max_retries} 次): {url} | 片段: {response.text[:120]!r}"
+                )
+                if waf_attempts >= waf_max_retries:
+                    # 到达 WAF 上限，终止
+                    raise WAFChallengeError(f"AWS WAF challenge persisted after {waf_max_retries} attempts for {url}")
+                # 未达上限，继续走下一轮重试（通过抛异常进入 except 分支）
+                raise WAFChallengeError("AWS WAF challenge (will retry)")
+
             return response
-            
+
         except retryable_exceptions as e:
-            logger.warning(f"请求失败 (尝试 {attempt + 1}/{max_retries}): {url}")
-            logger.warning(f"错误类型: {type(e).__name__}, 详情: {str(e)}")
-            
-            # 特殊处理连接重置错误
-            if "Connection reset by peer" in str(e) or "ConnectionResetError" in str(e):
+            # 特别处理连接重置
+            if isinstance(e, (ConnectionError, RequestException)) and (
+                "Connection reset by peer" in str(e) or "ConnectionResetError" in str(e)
+            ):
                 logger.warning("检测到连接重置，增加额外延迟...")
                 time.sleep(random.uniform(3, 8))
-            
+
+            logger.warning(f"请求失败 (尝试 {attempt + 1}/{max_retries}): {url}")
+            logger.warning(f"错误类型: {type(e).__name__}, 详情: {str(e)}")
+
             if attempt == max_retries - 1:
                 logger.error(f"所有重试均失败: {url}")
                 raise
         except Exception as e:
             logger.error(f"不可重试的错误: {url}, {type(e).__name__}: {str(e)}")
             raise
-    
-    raise RequestException(f"请求失败，已重试 {max_retries} 次")
+    raise RequestException(f"请求失败，已重试 {max_retries} 次: {url}")
 
 # 改进的重试装饰器，专门处理代理错误
 @retry(
@@ -304,11 +339,12 @@ def get_brief_info(brief_url, cookies, headers, contest_id, output_dir, session)
     wait_random_max=4000, 
     stop_max_attempt_number=8
 )
-def get_user_profile_info(user_url, cookies, headers, session):
-    """Fetch and extract user profile details with improved error handling."""
-    response = safe_request(session, user_url, cookies, headers)
-    soup = BeautifulSoup(response.text, 'lxml')
 
+def get_user_profile_info(user_url, cookies_user, headers_user, session):
+    """Fetch and extract user profile details with improved error handling."""
+
+    response = safe_request(session, user_url, cookies_user, headers_user)
+    soup = BeautifulSoup(response.text, 'lxml')
     # Extract AggregateRating and AggregateReviews
     aggregate_info = soup.find('span', itemprop='aggregateRating')
     if aggregate_info:
@@ -433,6 +469,58 @@ def download_images(url, output_dir, csv_filename, nonactive=False):
         'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
     }
 
+    cookies_user = {
+    '_99vid': '0191e08c-aa05-a7d3-e823-8d36d3f2f358',
+    '_99sid': '0191e08c-aa05-a7d3-e823-8d36df73d7f0',
+    'contests_session_id': '8bd10074e4d3ebf9efdfb45897e4fb08',
+    'contests_session_data': 'M0hyeCn8FhAkjvoGfBF43O5iCkjCK7S1YzOiaqdOZ1t4T0njwfnZjLu%2FcpJDvSZx--cf714bd29f171fd2d620c503c027248763144d5f',
+    'ajs_anonymous_id': '0191e08c-aa05-a7d3-e823-8d36df73d7f0',
+    '_tt_enable_cookie': '1',
+    '__ssid': '0566933993846243a707d16d8fd37fb',
+    'QuantumMetricUserID': 'b550e6947216aecefa22871cb8f8f0c7',
+    '__zlcmid': '1Ntn2a9zF2h7mpc',
+    '99previouslyauthenticated': 'true',
+    'ajs_user_id': '9411255',
+    'ki_r': '',
+    'IR_PI': '8cc97b74-7025-11ef-b5f5-17bb1b54210d%7C1728123903608',
+    '_ttp': '66R5dF03YRZBQIjWoMJ-3_vEcRN.tt.1',
+    '_fbp': 'fb.1.1756457548149.17103444377146716',
+    '_gcl_au': '1.1.292253385.1756457548',
+    '_99csrf': 'e985e77b3e66c16b5552c1d84730384e78e8c73f7cd13eab9603d635ac6f1e6f',
+    '_gid': 'GA1.2.1562809771.1756835941',
+    'IR_gbd': '99designs.hk',
+    'QuantumMetricSessionID': 'ba58b9245cabb706736e40831dcad67c',
+    '99segment_sessionidx': '64',
+    '99segment_session': '*',
+    'IR_3172': '1756839880585%7C127707%7C1756839880585%7C%7C',
+    '_ga': 'GA1.1.173363251.1726049203',
+    '_uetsid': '816c4c30882611f098f9c3eac810da1a',
+    '_uetvid': '8c2c1350702511ef90486520c41e52ce',
+    '_ga_1P5BPD7T0D': 'GS2.2.s1756839061$o44$g1$t1756839880$j60$l0$h0',
+    'ttcsid': '1756839061635::zZy5_RHqysRY3vXt1d64.3.1756839881003',
+    'ttcsid_CE8LLDBC77U8PGLVCNBG': '1756839061635::OdiIeo7nYBCGA7S9zSZH.3.1756839881212',
+    'ki_t': '1726049203587%3B1756835941548%3B1756839881393%3B19%3B303',
+    '_workbench_session': 'uLPvGKHw%2FBj0J3YvMfTyZY05fpPs78x3DYQxSLMcnnokut1xk2iHjjHt7hMOb%2B8Ya9b1Wgy8M%2FSfwvuum7CQ8rj0uU2k4rxssN%2F7HZn98En%2FuXpXUQ2PWXcprHv%2Bp%2Fe5bNtksTpdTMFLaZqN2kr%2Fax%2FeRW5T7mVxIqsm0Xq2%2B43MYlKoYqPw28JLInLCDjBu6qU8pum%2FXC7BC8IzJfj6yq4knxdkbTNTke2wVEQ1pf7s710HeR7hRxXplgtg4Pn6vvi8TrVfWzXCrE%2B0qtJit2goAkZ7j6ZZ384%3D--v3UwYOBlX4gmeRev--%2Bw6%2F3gsdnpOGjh%2BnccqcVQ%3D%3D',
+    '_ga_Z6XV646S1S': 'GS2.1.s1756839059$o48$g1$t1756841194$j60$l0$h0',
+    }
+
+    headers_user = {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'if-none-match': 'W/"3faffa06ef0a3cc04e7ffdf049dd40df"',
+    'priority': 'u=0, i',
+    'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"macOS"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+    # 'cookie': '_99vid=0191e08c-aa05-a7d3-e823-8d36d3f2f358; _99sid=0191e08c-aa05-a7d3-e823-8d36df73d7f0; contests_session_id=8bd10074e4d3ebf9efdfb45897e4fb08; contests_session_data=M0hyeCn8FhAkjvoGfBF43O5iCkjCK7S1YzOiaqdOZ1t4T0njwfnZjLu%2FcpJDvSZx--cf714bd29f171fd2d620c503c027248763144d5f; ajs_anonymous_id=0191e08c-aa05-a7d3-e823-8d36df73d7f0; _tt_enable_cookie=1; __ssid=0566933993846243a707d16d8fd37fb; QuantumMetricUserID=b550e6947216aecefa22871cb8f8f0c7; __zlcmid=1Ntn2a9zF2h7mpc; 99previouslyauthenticated=true; ajs_user_id=9411255; ki_r=; IR_PI=8cc97b74-7025-11ef-b5f5-17bb1b54210d%7C1728123903608; _ttp=66R5dF03YRZBQIjWoMJ-3_vEcRN.tt.1; _fbp=fb.1.1756457548149.17103444377146716; _gcl_au=1.1.292253385.1756457548; _99csrf=e985e77b3e66c16b5552c1d84730384e78e8c73f7cd13eab9603d635ac6f1e6f; _gid=GA1.2.1562809771.1756835941; IR_gbd=99designs.hk; QuantumMetricSessionID=ba58b9245cabb706736e40831dcad67c; 99segment_sessionidx=64; 99segment_session=*; IR_3172=1756839880585%7C127707%7C1756839880585%7C%7C; _ga=GA1.1.173363251.1726049203; _uetsid=816c4c30882611f098f9c3eac810da1a; _uetvid=8c2c1350702511ef90486520c41e52ce; _ga_1P5BPD7T0D=GS2.2.s1756839061$o44$g1$t1756839880$j60$l0$h0; ttcsid=1756839061635::zZy5_RHqysRY3vXt1d64.3.1756839881003; ttcsid_CE8LLDBC77U8PGLVCNBG=1756839061635::OdiIeo7nYBCGA7S9zSZH.3.1756839881212; ki_t=1726049203587%3B1756835941548%3B1756839881393%3B19%3B303; _workbench_session=uLPvGKHw%2FBj0J3YvMfTyZY05fpPs78x3DYQxSLMcnnokut1xk2iHjjHt7hMOb%2B8Ya9b1Wgy8M%2FSfwvuum7CQ8rj0uU2k4rxssN%2F7HZn98En%2FuXpXUQ2PWXcprHv%2Bp%2Fe5bNtksTpdTMFLaZqN2kr%2Fax%2FeRW5T7mVxIqsm0Xq2%2B43MYlKoYqPw28JLInLCDjBu6qU8pum%2FXC7BC8IzJfj6yq4knxdkbTNTke2wVEQ1pf7s710HeR7hRxXplgtg4Pn6vvi8TrVfWzXCrE%2B0qtJit2goAkZ7j6ZZ384%3D--v3UwYOBlX4gmeRev--%2Bw6%2F3gsdnpOGjh%2BnccqcVQ%3D%3D; _ga_Z6XV646S1S=GS2.1.s1756839059$o48$g1$t1756841194$j60$l0$h0',
+    }
+
     # 创建具有重试机制的session
     session = create_robust_session()
     
@@ -526,7 +614,7 @@ def download_images(url, output_dir, csv_filename, nonactive=False):
                     profile_data = visited_authors[user_url]
                 else:
                     try:
-                        profile_data = get_user_profile_info(user_url, cookies, headers, session)
+                        profile_data = get_user_profile_info(user_url, cookies_user, headers_user, session)
                         visited_authors[user_url] = profile_data
                     except Exception as e:
                         logger.warning(f"获取用户信息失败: {user_url}, 错误: {e}")
